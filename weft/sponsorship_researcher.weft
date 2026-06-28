@@ -1,0 +1,51 @@
+# Project: Sponsorship Researcher
+# Description: Parallel company-event relevance research with human-in-the-loop review
+
+# ─────────────────────────────────────────────────────────────
+# INSTRUCTIONS FOR CURSOR / AI BUILDER
+# ─────────────────────────────────────────────────────────────
+# This is a skeleton. Fill in the wiring below using the
+# language syntax rules in docs/cursor_transfer_plan.md.
+#
+# Key nodes to wire:
+#   trigger (ApiPost) → research (TavilySearch x2 + Http) →
+#   synthesizer (LlmInference) → review (HumanQuery) →
+#   gate (Gate) → outreach (LlmInference) / deep_search (TavilySearch)
+#
+# Read docs/cursor_transfer_plan.md → "Part 1: The Weft Workflow"
+# for the exact port names, field types, and wiring.
+# ─────────────────────────────────────────────────────────────
+
+# ── Entry point ──────────────────────────────────────────────
+trigger = ApiPost -> (companies: String, event_description: String, sheet_id: String) {
+  label: "Research Trigger"
+}
+
+# ── LLM & search config ──────────────────────────────────────
+llm_config = LlmConfig {
+  label: "Research LLM"
+  model: "anthropic/claude-sonnet-4-5"
+  temperature: "0.3"
+}
+
+tavily_config = TavilyConfig {
+  label: "Tavily Config"
+}
+
+# ── Research (parallel per company pulse) ────────────────────
+# TODO: add TavilySearch nodes, Http scrape, Template to combine results
+
+# ── Synthesis ────────────────────────────────────────────────
+# TODO: LlmInference that produces a JSON brief + scores
+
+# ── Human review ─────────────────────────────────────────────
+# TODO: HumanQuery with approve_reject, annotation, deeper_dive_direction fields
+
+# ── Routing ──────────────────────────────────────────────────
+# TODO: Gate nodes for approve vs deeper_dive branches
+
+# ── Approved: draft outreach ─────────────────────────────────
+# TODO: LlmInference → Debug
+
+# ── Deeper dive: re-research ─────────────────────────────────
+# TODO: TavilySearch with user direction → loop back to synthesis

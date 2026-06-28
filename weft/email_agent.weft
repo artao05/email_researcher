@@ -1,0 +1,23 @@
+# Project: Email Responder
+# Description: Reviews incoming emails and sends an automated response
+
+# Trigger on incoming email
+incoming = EmailReceive {
+  label: "Incoming Email"
+}
+
+# Analyze the email and draft a response
+llm = LlmInference -> (response: String) {
+  label: "Drafter"
+  systemPrompt: "You are an assistant reading incoming emails. Draft a short, polite reply acknowledging receipt and stating we will get back to them soon."
+  model: "anthropic/claude-3-haiku"
+}
+llm.prompt = incoming.body
+
+# Send the drafted response back to the sender
+reply = EmailSend {
+  label: "Send Reply"
+}
+reply.to = incoming.from
+reply.subject = "Re: " + incoming.subject
+reply.body = llm.response
