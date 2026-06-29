@@ -225,8 +225,17 @@ async function startResearch() {
   if (state.templateBlocks.length === 0) return showStatus('error', 'Could not parse email template blocks');
 
   const uiKeys = getUiApiKeys();
-  const llm = resolveLlmConfig(uiKeys);
-  if (!llm) return showStatus('error', 'At least one API key required (selected provider or fallback)');
+  let llm = resolveLlmConfig(uiKeys);
+  if (!llm) {
+    // Keys may be injected server-side via register-trigger.sh (.env)
+    llm = {
+      provider: document.getElementById('llm-provider').value,
+      model: document.getElementById('llm-model').value,
+      apiKey: '',
+      fallbackUsed: false,
+      serverKeys: true,
+    };
+  }
 
   btn.disabled = true;
   btn.textContent = 'Fetching sheet...';
@@ -234,8 +243,18 @@ async function startResearch() {
 
   try {
     const csvUrl = sheetUrlToCsvUrl(sheetUrl);
-    const res = await fetch(csvUrl);
-    if (!res.ok) throw new Error(`Could not fetch sheet (${res.status}). Share with service account or "Anyone with link".`);
+    const sheetFetchUrl = `${window.location.origin}/api/sheet?url=${encodeURIComponent(sheetUrl)}`;
+    let res;
+    try {
+      res = await fetch(sheetFetchUrl);
+    } catch {
+      res = await fetch(csvUrl);
+    }
+    if (!res.ok) {
+      let detail = '';
+      try { detail = (await res.json()).error; } catch { detail = await res.text(); }
+      throw new Error(detail || `Could not fetch sheet (${res.status}). Share with "Anyone with the link".`);
+    }
     state.companies = parseCsv(await res.text());
     if (state.companies.length === 0) throw new Error('No companies found in the sheet');
 
@@ -268,9 +287,10 @@ async function startResearch() {
     showQueueView();
     startPolling();
   } catch (err) {
-    const msg = err.message === 'Failed to fetch'
-      ? 'Network error — is Weft running on :3000? Open the UI via http://localhost:8090 (run: bash scripts/open-ui.sh), not as a file:// page.'
-      : err.message;
+    let msg = err.message || String(err);
+    if (msg === 'Failed to fetch') {
+      msg = 'Network error. Use http://localhost:8090 (bash scripts/open-ui.sh), ensure Weft is on :3000, and share your Google Sheet as "Anyone with the link".';
+    }
     showStatus('error', msg);
     btn.disabled = false;
     btn.textContent = 'Run Research';

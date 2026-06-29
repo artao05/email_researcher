@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Serve sponsorship-ui over HTTP (required for Weft API calls — file:// is blocked by CORS).
+# Serve sponsorship-ui over HTTP (required for Weft API + Google Sheet proxy).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-UI_DIR="$ROOT/sponsorship-ui"
 PORT="${SPONSORSHIP_UI_PORT:-8090}"
 
 if lsof -ti ":$PORT" >/dev/null 2>&1; then
@@ -12,5 +11,4 @@ if lsof -ti ":$PORT" >/dev/null 2>&1; then
 fi
 
 echo "Starting sponsorship UI at http://localhost:$PORT"
-cd "$UI_DIR"
-exec python3 -m http.server "$PORT"
+exec python3 "$ROOT/scripts/serve-ui.py"
