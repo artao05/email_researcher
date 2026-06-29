@@ -7,49 +7,203 @@ let state = {
   token: '',
   triggerId: '',
   eventDescription: '',
+  sponsorshipTiers: '',
   sheetId: '',
-  companies: [],       // [{ name, url }]
-  tasks: {},           // executionId → task object from Weft
-  companyStatus: {},   // companyIndex → 'researching'|'needs-review'|'approved'|'skipped'|'re-researching'
+  templateBlocks: [],
+  subjectPersonalize: true,
+  companies: [],       // [{ name, row }]
+  tasks: {},
+  companyStatus: {},
   currentReviewTask: null,
   pollTimer: null,
 };
 
 // ─── Persistence ──────────────────────────────────────────────
+const STORAGE_KEYS = [
+  'weft_token', 'weft_trigger_id', 'event_description', 'sponsorship_tiers',
+  'email_template', 'subject_personalize', 'template_blocks_json',
+  'llm_key_openrouter', 'llm_key_gemini', 'llm_key_groq', 'llm_key_primary',
+  'google_sa_json', 'sheet_url',
+];
+
 function loadSaved() {
-  const token     = localStorage.getItem('weft_token')     || '';
-  const triggerId = localStorage.getItem('weft_trigger_id') || '';
-  if (token)     document.getElementById('ext-token').value   = token;
-  if (triggerId) document.getElementById('trigger-id').value  = triggerId;
+  const map = {
+    'ext-token': 'weft_token',
+    'trigger-id': 'weft_trigger_id',
+    'event-description': 'event_description',
+    'sponsorship-tiers': 'sponsorship_tiers',
+    'email-template': 'email_template',
+    'sheet-url': 'sheet_url',
+    'llm-key-openrouter': 'llm_key_openrouter',
+    'llm-key-gemini': 'llm_key_gemini',
+    'llm-key-groq': 'llm_key_groq',
+    'llm-key-primary': 'llm_key_primary',
+    'google-sa-json': 'google_sa_json',
+  };
+  for (const [elId, key] of Object.entries(map)) {
+    const val = localStorage.getItem(key);
+    if (val) document.getElementById(elId).value = val;
+  }
+  const subj = localStorage.getItem('subject_personalize');
+  if (subj !== null) document.getElementById('subject-personalize').checked = subj === 'true';
+  loadProviderPrefs();
+  restoreTemplateBlocks();
 }
 
 function save() {
-  state.token     = document.getElementById('ext-token').value.trim();
+  state.token = document.getElementById('ext-token').value.trim();
   state.triggerId = document.getElementById('trigger-id').value.trim();
-  localStorage.setItem('weft_token',      state.token);
+  localStorage.setItem('weft_token', state.token);
   localStorage.setItem('weft_trigger_id', state.triggerId);
+  localStorage.setItem('event_description', document.getElementById('event-description').value);
+  localStorage.setItem('sponsorship_tiers', document.getElementById('sponsorship-tiers').value);
+  localStorage.setItem('email_template', document.getElementById('email-template').value);
+  localStorage.setItem('sheet_url', document.getElementById('sheet-url').value);
+  localStorage.setItem('subject_personalize', document.getElementById('subject-personalize').checked);
+  localStorage.setItem('template_blocks_json', JSON.stringify(state.templateBlocks));
+  localStorage.setItem('llm_key_openrouter', document.getElementById('llm-key-openrouter').value);
+  localStorage.setItem('llm_key_gemini', document.getElementById('llm-key-gemini').value);
+  localStorage.setItem('llm_key_groq', document.getElementById('llm-key-groq').value);
+  localStorage.setItem('llm_key_primary', document.getElementById('llm-key-primary').value);
+  localStorage.setItem('google_sa_json', document.getElementById('google-sa-json').value);
+  saveProviderPrefs();
+  syncPrimaryKeyToProvider();
 }
 
-// ─── Google Sheets ────────────────────────────────────────────
+function syncPrimaryKeyToProvider() {
+  const provider = document.getElementById('llm-provider').value;
+  const primary = document.getElementById('llm-key-primary').value;
+  const idMap = { openrouter: 'llm-key-openrouter', gemini: 'llm-key-gemini', groq: 'llm-key-groq' };
+  const el = document.getElementById(idMap[provider]);
+  if (el && primary) el.value = primary;
+}
+
+function getUiApiKeys() {
+  syncPrimaryKeyToProvider();
+  return {
+    openrouter: document.getElementById('llm-key-openrouter').value.trim(),
+    gemini: document.getElementById('llm-key-gemini').value.trim(),
+    groq: document.getElementById('llm-key-groq').value.trim(),
+  };
+}
+
+// ─── Template blocks ──────────────────────────────────────────
+function splitTemplate() {
+  const raw = document.getElementById('email-template').value.trim();
+  if (!raw) return showStatus('error', 'Paste an example email first');
+
+  const parts = raw.split(/\n\s*\n/).map(t => t.trim()).filter(Boolean);
+  if (parts.length === 0) return showStatus('error', 'Could not split email into blocks');
+
+  state.templateBlocks = parts.map((text, i) => ({
+    index: i,
+    text,
+    mode: i === 0 ? 'fixed' : 'personalize',
+  }));
+
+  renderTemplateBlocks();
+  showStatus('info', `Split into ${parts.length} blocks — toggle each as Keep identical or Personalize`);
+}
+
+function restoreTemplateBlocks() {
+  try {
+    const saved = localStorage.getItem('template_blocks_json');
+    if (saved) {
+      state.templateBlocks = JSON.parse(saved);
+      if (state.templateBlocks.length) renderTemplateBlocks();
+    }
+  } catch (_) { /* ignore */ }
+}
+
+function renderTemplateBlocks() {
+  const container = document.getElementById('template-blocks');
+  container.classList.remove('hidden');
+  container.innerHTML = state.templateBlocks.map((block, i) => `
+    <div class="template-block ${block.mode}" data-index="${i}">
+      <div class="block-header">
+        <span class="block-num">${block.label ? escHtml(block.label) : `Block ${i + 1}`}</span>
+        <div class="block-toggles">
+          <button type="button" class="mode-btn ${block.mode === 'fixed' ? 'active fixed' : ''}"
+            onclick="setBlockMode(${i}, 'fixed')">Keep identical</button>
+          <button type="button" class="mode-btn ${block.mode === 'personalize' ? 'active personalize' : ''}"
+            onclick="setBlockMode(${i}, 'personalize')">Personalize</button>
+        </div>
+      </div>
+      ${block.hint ? `<div class="block-hint">${escHtml(block.hint)}</div>` : ''}
+      <pre class="block-text">${escHtml(block.text)}</pre>
+    </div>
+  `).join('');
+}
+
+function setBlockMode(index, mode) {
+  if (state.templateBlocks[index]) {
+    state.templateBlocks[index].mode = mode;
+    renderTemplateBlocks();
+    localStorage.setItem('template_blocks_json', JSON.stringify(state.templateBlocks));
+  }
+}
+
+function buildTemplatePayload() {
+  if (state.templateBlocks.length === 0) splitTemplate();
+  return {
+    subject_mode: document.getElementById('subject-personalize').checked ? 'personalize' : 'fixed',
+    suggested_subject: typeof CHIMES_TEMPLATE !== 'undefined' ? CHIMES_TEMPLATE.suggestedSubject : '',
+    sponsorship_tiers: document.getElementById('sponsorship-tiers').value.trim(),
+    blocks: state.templateBlocks.map(b => ({
+      text: b.text,
+      mode: b.mode,
+      label: b.label || '',
+      hint: b.hint || '',
+    })),
+  };
+}
+
+// ─── Google Sheets read ───────────────────────────────────────
 function sheetUrlToCsvUrl(url) {
   const match = url.match(/\/d\/([a-zA-Z0-9-_]+)/);
   if (!match) throw new Error('Invalid Google Sheets URL — could not extract sheet ID');
-  const id = match[1];
-  state.sheetId = id;
-  return `https://docs.google.com/spreadsheets/d/${id}/export?format=csv`;
+  state.sheetId = match[1];
+  return `https://docs.google.com/spreadsheets/d/${state.sheetId}/export?format=csv`;
 }
 
 function parseCsv(text) {
-  const lines = text.trim().split('\n').map(l => l.split(',').map(c => c.trim().replace(/^"|"$/g, '')));
+  const lines = text.trim().split('\n').map(l => {
+    const row = [];
+    let cur = '', inQ = false;
+    for (let i = 0; i < l.length; i++) {
+      const c = l[i];
+      if (c === '"') { inQ = !inQ; continue; }
+      if (c === ',' && !inQ) { row.push(cur.trim()); cur = ''; continue; }
+      cur += c;
+    }
+    row.push(cur.trim());
+    return row;
+  });
   if (lines.length < 2) throw new Error('Sheet must have at least one data row');
-  const headers = lines[0].map(h => h.toLowerCase());
-  const nameIdx = headers.findIndex(h => h.includes('company') || h.includes('name'));
-  const urlIdx  = headers.findIndex(h => h.includes('url') || h.includes('website') || h.includes('domain'));
-  if (nameIdx < 0) throw new Error('Sheet must have a "Company Name" column');
-  if (urlIdx  < 0) throw new Error('Sheet must have a "Website URL" column');
+
+  const headers = lines[0].map(h => h.toLowerCase().replace(/^"|"$/g, ''));
+  const col = (...patterns) => headers.findIndex(h => patterns.some(p => h.includes(p)));
+
+  const nameIdx = col('company', 'sponsor') >= 0 ? col('company', 'sponsor') : col('name');
+  if (nameIdx < 0) throw new Error('Sheet must have a "Company Name" column (row 1)');
+
+  const pocNameIdx = col('poc name', 'contact name', 'contact');
+  const pocEmailIdx = col('poc email', 'email');
+  const industryIdx = col('industry');
+  const urlIdx = col('url', 'link', 'website');
+
+  const clean = v => (v || '').replace(/^"|"$/g, '');
+
   return lines.slice(1)
-    .filter(row => row[nameIdx])
-    .map(row => ({ name: row[nameIdx], url: row[urlIdx] || '' }));
+    .map((row, i) => ({
+      name: clean(row[nameIdx]),
+      row: i + 2,
+      poc_name: pocNameIdx >= 0 ? clean(row[pocNameIdx]) : '',
+      poc_email: pocEmailIdx >= 0 ? clean(row[pocEmailIdx]) : '',
+      industry: industryIdx >= 0 ? clean(row[industryIdx]) : '',
+      url: urlIdx >= 0 ? clean(row[urlIdx]) : '',
+    }))
+    .filter(c => c.name);
 }
 
 // ─── Start research ───────────────────────────────────────────
@@ -58,14 +212,21 @@ async function startResearch() {
 
   const sheetUrl = document.getElementById('sheet-url').value.trim();
   state.eventDescription = document.getElementById('event-description').value.trim();
+  state.sponsorshipTiers = document.getElementById('sponsorship-tiers').value.trim();
 
-  const statusEl = document.getElementById('parse-status');
   const btn = document.getElementById('run-btn');
 
-  if (!state.token)     return showStatus('error', 'Extension token is required');
+  if (!state.token) return showStatus('error', 'Extension token is required');
   if (!state.triggerId) return showStatus('error', 'Weft Trigger ID is required');
-  if (!sheetUrl)        return showStatus('error', 'Google Sheet URL is required');
+  if (!sheetUrl) return showStatus('error', 'Google Sheet URL is required');
   if (!state.eventDescription) return showStatus('error', 'Event description is required');
+  if (!document.getElementById('email-template').value.trim()) return showStatus('error', 'Paste an example email template');
+  if (state.templateBlocks.length === 0) splitTemplate();
+  if (state.templateBlocks.length === 0) return showStatus('error', 'Could not parse email template blocks');
+
+  const uiKeys = getUiApiKeys();
+  const llm = resolveLlmConfig(uiKeys);
+  if (!llm) return showStatus('error', 'At least one API key required (selected provider or fallback)');
 
   btn.disabled = true;
   btn.textContent = 'Fetching sheet...';
@@ -74,20 +235,22 @@ async function startResearch() {
   try {
     const csvUrl = sheetUrlToCsvUrl(sheetUrl);
     const res = await fetch(csvUrl);
-    if (!res.ok) throw new Error(`Could not fetch sheet (${res.status}). Make sure it's shared publicly.`);
-    const text = await res.text();
-    state.companies = parseCsv(text);
-
+    if (!res.ok) throw new Error(`Could not fetch sheet (${res.status}). Share with service account or "Anyone with link".`);
+    state.companies = parseCsv(await res.text());
     if (state.companies.length === 0) throw new Error('No companies found in the sheet');
 
-    showStatus('info', `Found ${state.companies.length} companies. Starting research...`);
+    showStatus('info', `Found ${state.companies.length} companies. Starting research with ${LLM_CATALOG[llm.provider].label}${llm.fallbackUsed ? ' (fallback)' : ''}...`);
     btn.textContent = 'Triggering Weft...';
 
-    // POST to Weft
     const payload = {
       companies: JSON.stringify(state.companies),
       event_description: state.eventDescription,
       sheet_id: state.sheetId,
+      template: JSON.stringify(buildTemplatePayload()),
+      llm_provider: llm.provider,
+      llm_model: llm.model,
+      api_keys: JSON.stringify(uiKeys),
+      google_credentials: document.getElementById('google-sa-json').value.trim() || '',
     };
 
     const weftRes = await fetch(`${WEFT_API}/api/v1/webhooks/${state.triggerId}`, {
@@ -101,12 +264,9 @@ async function startResearch() {
       throw new Error(`Weft API error (${weftRes.status}): ${body}`);
     }
 
-    // All companies start as "researching"
     state.companies.forEach((_, i) => { state.companyStatus[i] = 'researching'; });
-
     showQueueView();
     startPolling();
-
   } catch (err) {
     showStatus('error', err.message);
     btn.disabled = false;
@@ -121,21 +281,24 @@ function showStatus(type, msg) {
   el.classList.remove('hidden');
 }
 
-// ─── View transitions ─────────────────────────────────────────
+// ─── Views ────────────────────────────────────────────────────
 function showSetup() {
   stopPolling();
   document.getElementById('view-setup').className = 'view active';
   document.getElementById('view-queue').className = 'view hidden';
+  document.getElementById('run-btn').disabled = false;
+  document.getElementById('run-btn').textContent = 'Run Research';
 }
 
 function showQueueView() {
   document.getElementById('view-setup').className = 'view hidden';
   document.getElementById('view-queue').className = 'view active';
-  document.getElementById('event-summary').textContent = `Event: ${state.eventDescription.slice(0, 120)}${state.eventDescription.length > 120 ? '...' : ''}`;
+  document.getElementById('event-summary').textContent =
+    `Event: ${state.eventDescription.slice(0, 100)}${state.eventDescription.length > 100 ? '…' : ''}`;
   renderCompanyList();
 }
 
-// ─── Company list rendering ───────────────────────────────────
+// ─── Company list ─────────────────────────────────────────────
 function renderCompanyList() {
   const list = document.getElementById('company-list');
   list.innerHTML = '';
@@ -146,33 +309,28 @@ function renderCompanyList() {
 
     const card = document.createElement('div');
     card.className = `company-card${status === 'needs-review' ? ' needs-review' : ''}`;
-    card.id = `company-card-${i}`;
-
     card.innerHTML = `
       <div class="company-info">
         <div class="company-name">${escHtml(company.name)}</div>
-        <div class="company-url">${escHtml(company.url)}</div>
+        <div class="company-url">${task?.data?.discovered_url ? escHtml(task.data.discovered_url) : `Row ${company.row}`}</div>
       </div>
       ${renderBadge(status)}
-      ${status === 'needs-review' && task
-        ? `<button class="btn-review" onclick="openReview(${i})">Review →</button>`
-        : ''}
+      ${status === 'needs-review' && task ? `<button class="btn-review" onclick="openReview(${i})">Review →</button>` : ''}
     `;
     list.appendChild(card);
   });
-
   updateStats();
 }
 
 function renderBadge(status) {
   const map = {
-    'researching':    ['status-researching',    'Researching',    true],
-    'needs-review':   ['status-needs-review',   'Needs Review',   true],
-    'approved':       ['status-approved',        'Approved',       false],
-    'skipped':        ['status-skipped',         'Skipped',        false],
-    're-researching': ['status-re-researching',  'Re-researching', true],
+    researching: ['status-researching', 'Researching', true],
+    'needs-review': ['status-needs-review', 'Needs Review', true],
+    approved: ['status-approved', 'Written to Sheet', false],
+    skipped: ['status-skipped', 'Skipped', false],
+    're-researching': ['status-re-researching', 'Re-researching', true],
   };
-  const [cls, label, pulse] = map[status] || map['researching'];
+  const [cls, label, pulse] = map[status] || map.researching;
   return `<span class="status-badge ${cls}">${pulse ? '<span class="pulse-dot"></span>' : ''}${label}</span>`;
 }
 
@@ -181,19 +339,17 @@ function updateStats() {
     acc[s] = (acc[s] || 0) + 1;
     return acc;
   }, {});
-
   const total = state.companies.length;
-  const statsEl = document.getElementById('queue-stats');
-  statsEl.innerHTML = `
+  document.getElementById('queue-stats').innerHTML = `
     <span class="queue-stat">${total} companies</span>
-    ${counts['researching']    ? `<span class="queue-stat" style="color:var(--accent)">${counts['researching']} researching</span>` : ''}
-    ${counts['needs-review']   ? `<span class="queue-stat" style="color:var(--amber)">${counts['needs-review']} needs review</span>` : ''}
-    ${counts['approved']       ? `<span class="queue-stat" style="color:var(--green)">${counts['approved']} approved</span>` : ''}
-    ${counts['skipped']        ? `<span class="queue-stat" style="color:var(--text-muted)">${counts['skipped']} skipped</span>` : ''}
+    ${counts.researching ? `<span class="queue-stat accent">${counts.researching} researching</span>` : ''}
+    ${counts['needs-review'] ? `<span class="queue-stat amber">${counts['needs-review']} needs review</span>` : ''}
+    ${counts.approved ? `<span class="queue-stat green">${counts.approved} written</span>` : ''}
+    ${counts.skipped ? `<span class="queue-stat">${counts.skipped} skipped</span>` : ''}
   `;
 }
 
-// ─── Polling ───────────────────────────────────────────────────
+// ─── Polling ──────────────────────────────────────────────────
 function startPolling() {
   if (state.pollTimer) clearInterval(state.pollTimer);
   pollTasks();
@@ -208,30 +364,34 @@ async function pollTasks() {
   try {
     const res = await fetch(`${WEFT_API}/ext/${state.token}/tasks`);
     if (!res.ok) return;
-    const data = await res.json();
-    const tasks = (data.tasks || []).filter(t => t.metadata?.source === 'human');
+    const tasks = (await res.json()).tasks || [];
+    const humanTasks = tasks.filter(t => t.metadata?.source === 'human');
 
-    // Update known tasks
     state.tasks = {};
-    tasks.forEach(task => { state.tasks[task.executionId] = task; });
+    humanTasks.forEach(t => { state.tasks[t.executionId] = t; });
 
-    // Match tasks back to companies by name in task data
-    tasks.forEach(task => {
-      const companyName = task.data?.company?.name;
-      if (!companyName) return;
-      const idx = state.companies.findIndex(c => c.name === companyName);
-      if (idx >= 0 && state.companyStatus[idx] !== 'approved' && state.companyStatus[idx] !== 'skipped') {
+    humanTasks.forEach(task => {
+      const idx = companyIndexFromTask(task);
+      if (idx >= 0 && !['approved', 'skipped'].includes(state.companyStatus[idx])) {
         state.companyStatus[idx] = 'needs-review';
       }
     });
-
     renderCompanyList();
   } catch (_) { /* silent */ }
 }
 
+function companyIndexFromTask(task) {
+  const name = task.data?.company?.name || task.data?.company_name;
+  if (!name) return -1;
+  return state.companies.findIndex(c => c.name === name);
+}
+
 function findTaskForCompany(idx) {
   const company = state.companies[idx];
-  return Object.values(state.tasks).find(t => t.data?.company?.name === company.name) || null;
+  return Object.values(state.tasks).find(t => {
+    const n = t.data?.company?.name || t.data?.company_name;
+    return n === company.name;
+  }) || null;
 }
 
 // ─── Review panel ─────────────────────────────────────────────
@@ -240,33 +400,57 @@ function openReview(companyIdx) {
   if (!task) return;
 
   state.currentReviewTask = { task, companyIdx };
-
   const company = state.companies[companyIdx];
   const data = task.data || {};
-  const scores = data.scores || {};
+  let scores = data.scores || {};
+  if (typeof scores === 'string') {
+    try { scores = JSON.parse(scores); } catch (_) { scores = {}; }
+  }
 
   document.getElementById('review-company-name').textContent = company.name;
   const urlEl = document.getElementById('review-company-url');
-  urlEl.textContent = company.url;
-  urlEl.href = company.url;
+  const url = data.discovered_url || data.company?.url || '';
+  if (url) {
+    urlEl.textContent = url;
+    urlEl.href = url;
+    urlEl.classList.remove('hidden');
+  } else {
+    urlEl.textContent = `Sheet row ${company.row}`;
+    urlEl.href = '#';
+  }
 
-  // Score pills
-  const pillsEl = document.getElementById('score-pills');
-  pillsEl.innerHTML = ['mission', 'recent_activity', 'audience', 'overall'].map(key => {
-    const val = scores[key] || '?';
-    const cls = val >= 8 ? 'score-high' : val >= 5 ? 'score-mid' : 'score-low';
-    const label = key.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
-    return `<div class="score-pill"><span class="score-label">${label}</span><span class="score-value ${cls}">${val}</span></div>`;
+  document.getElementById('score-pills').innerHTML =
+    ['mission', 'recent_activity', 'audience', 'overall'].map(key => {
+      const val = scores[key]?.score ?? scores[key] ?? '?';
+      const cls = val >= 8 ? 'score-high' : val >= 5 ? 'score-mid' : 'score-low';
+      const label = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+      return `<div class="score-pill"><span class="score-label">${label}</span><span class="score-value ${cls}">${val}</span></div>`;
+    }).join('');
+
+  const justEl = document.getElementById('score-justifications');
+  justEl.innerHTML = ['mission', 'recent_activity', 'audience'].map(key => {
+    const entry = scores[key];
+    const justification = typeof entry === 'object' ? entry.justification : '';
+    if (!justification) return '';
+    const label = key.replace(/_/g, ' ');
+    return `<div class="justification-item"><strong>${label}:</strong> ${escHtml(justification)}</div>`;
   }).join('');
 
-  // Brief
-  document.getElementById('review-brief').textContent = data.brief || 'No brief available yet.';
+  document.getElementById('review-brief').textContent = data.brief || 'Research in progress…';
+  document.getElementById('review-process').textContent =
+    data.process || data.personalization_plan || 'Fixed blocks preserved; variable blocks will use research highlights on approve.';
 
-  // Reset form
+  const draftSection = document.getElementById('draft-section');
+  if (data.draft_preview) {
+    draftSection.classList.remove('hidden');
+    document.getElementById('review-draft').textContent = data.draft_preview;
+  } else {
+    draftSection.classList.add('hidden');
+  }
+
   document.getElementById('annotation-input').value = '';
   document.getElementById('direction-input').value = '';
   document.getElementById('direction-group').classList.add('hidden');
-
   document.getElementById('review-overlay').classList.remove('hidden');
 }
 
@@ -277,19 +461,19 @@ function closeReview(evt) {
 }
 
 function toggleDiveDirection() {
-  const group = document.getElementById('direction-group');
-  group.classList.toggle('hidden');
-  if (!group.classList.contains('hidden')) {
-    document.getElementById('direction-input').focus();
-  }
+  document.getElementById('direction-group').classList.toggle('hidden');
+  document.getElementById('direction-input').focus();
 }
 
 async function submitReview(action) {
   if (!state.currentReviewTask) return;
   const { task, companyIdx } = state.currentReviewTask;
-
   const annotation = document.getElementById('annotation-input').value.trim();
-  const direction  = document.getElementById('direction-input').value.trim();
+  const direction = document.getElementById('direction-input').value.trim();
+
+  if (action === 'deeper' && !direction) {
+    return showStatus('error', 'Enter a direction for the deeper dive');
+  }
 
   if (action === 'skip') {
     await cancelTask(task.executionId);
@@ -298,7 +482,7 @@ async function submitReview(action) {
     const input = {
       decision: action === 'approve',
       annotation,
-      deeper_dive_direction: direction,
+      deeper_dive_direction: action === 'deeper' ? direction : '',
     };
     await completeTask(task.executionId, task.nodeId, task.metadata?.callbackId, input);
     state.companyStatus[companyIdx] = action === 'approve' ? 'approved' : 're-researching';
@@ -308,30 +492,28 @@ async function submitReview(action) {
   state.currentReviewTask = null;
   renderCompanyList();
 
-  // Auto-advance to next needs-review
   const next = state.companies.findIndex((_, i) => state.companyStatus[i] === 'needs-review');
   if (next >= 0) setTimeout(() => openReview(next), 400);
 }
 
-// ─── Weft API calls ────────────────────────────────────────────
 async function completeTask(executionId, nodeId, callbackId, input) {
-  await fetch(`${WEFT_API}/ext/${state.token}/tasks/${executionId}/complete`, {
+  const res = await fetch(`${WEFT_API}/ext/${state.token}/tasks/${executionId}/complete`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ nodeId, callbackId, input }),
   });
+  if (!res.ok) throw new Error(`Complete task failed (${res.status})`);
 }
 
 async function cancelTask(executionId) {
-  await fetch(`${WEFT_API}/ext/${state.token}/tasks/${executionId}/cancel`, {
-    method: 'POST',
-  });
+  const res = await fetch(`${WEFT_API}/ext/${state.token}/tasks/${executionId}/cancel`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Cancel task failed (${res.status})`);
 }
 
-// ─── Utils ────────────────────────────────────────────────────
 function escHtml(str) {
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-// ─── Init ─────────────────────────────────────────────────────
 loadSaved();
+if (typeof loadDefaultTemplateIfEmpty === 'function') loadDefaultTemplateIfEmpty();
+document.getElementById('llm-model').addEventListener('change', saveProviderPrefs);

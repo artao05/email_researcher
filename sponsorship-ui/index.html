@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Sponsorship Researcher</title>
-  <meta name="description" content="Research company-event alignment for sponsorship targeting" />
+  <title>Sponsorship Email Assistant</title>
+  <meta name="description" content="Research assistant for tailoring sponsorship outreach emails" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
@@ -15,33 +15,120 @@
     <div class="setup-container">
       <div class="logo">
         <span class="logo-icon">⬡</span>
-        <h1>Sponsorship Researcher</h1>
+        <h1>Sponsorship Email Assistant</h1>
       </div>
-      <p class="subtitle">Research company-event relevance at scale, with human-in-the-loop review.</p>
+      <p class="subtitle">Research companies, personalize your template, and draft tailored sponsorship emails — with human review before writing to your sheet.</p>
 
-      <div class="form-group">
-        <label for="event-description">Event Description</label>
-        <textarea id="event-description" rows="5"
-          placeholder="Describe the event — its focus, audience, themes, and scope..."></textarea>
-      </div>
+      <section class="setup-section">
+        <h2 class="section-title">Event &amp; Sheet</h2>
 
-      <div class="form-group">
-        <label for="sheet-url">Google Sheet URL</label>
-        <input type="url" id="sheet-url"
-          placeholder="https://docs.google.com/spreadsheets/d/..." />
-        <span class="hint">Sheet must have "Company Name" and "Website URL" columns. Share as "Anyone with link can view."</span>
-      </div>
-
-      <div class="form-row">
         <div class="form-group">
-          <label for="trigger-id">Weft Trigger ID</label>
-          <input type="text" id="trigger-id" placeholder="uuid from ApiPost node" />
+          <label for="event-description">Event Description</label>
+          <textarea id="event-description" rows="4"
+            placeholder="Describe the event — focus, audience, themes, and scope..."></textarea>
         </div>
+
         <div class="form-group">
-          <label for="ext-token">Extension Token</label>
-          <input type="password" id="ext-token" placeholder="from Weft dashboard" />
+          <label for="sponsorship-tiers">Sponsorship Tiers</label>
+          <textarea id="sponsorship-tiers" rows="5"
+            placeholder="Paste your tier structure (Gold / Silver / etc.) — kept identical in every email unless you mark a block as personalize."></textarea>
         </div>
-      </div>
+
+        <div class="form-group">
+          <label for="sheet-url">Google Sheet URL</label>
+          <input type="url" id="sheet-url"
+            placeholder="https://docs.google.com/spreadsheets/d/..." />
+          <span class="hint">Columns A–E: <strong>Company Name</strong> (required), POC Name, POC Email, Industry, URL/link (optional). On approve, writes F–I: Research Brief, Scores, Email Draft, Status.</span>
+        </div>
+      </section>
+
+      <section class="setup-section">
+        <h2 class="section-title">Email Template</h2>
+        <p class="section-desc">Paste an example sponsorship email. Split into blocks, then mark each as <em>Keep identical</em> or <em>Personalize</em>.</p>
+
+        <div class="form-group">
+          <label for="email-template">Example Email</label>
+          <textarea id="email-template" rows="10"
+            placeholder="Paste your sponsorship email example here..."></textarea>
+        </div>
+
+        <div class="template-toolbar">
+          <button type="button" class="btn-secondary" onclick="applyChimesTemplate()">Load CHIMES template</button>
+          <button type="button" class="btn-secondary" onclick="splitTemplate()">Split into blocks</button>
+          <label class="inline-toggle">
+            <input type="checkbox" id="subject-personalize" checked />
+            Personalize subject line
+          </label>
+        </div>
+
+        <div id="template-blocks" class="template-blocks hidden"></div>
+      </section>
+
+      <section class="setup-section">
+        <h2 class="section-title">LLM Provider</h2>
+        <p class="section-desc">One model for research and drafting. UI keys override Weft <code>.env</code>. Missing keys fall back in order: selected → OpenRouter → Gemini → Groq.</p>
+
+        <div class="form-row form-row-3">
+          <div class="form-group">
+            <label for="llm-provider">Provider</label>
+            <select id="llm-provider" onchange="onProviderChange()">
+              <option value="openrouter">OpenRouter</option>
+              <option value="gemini">Gemini (direct)</option>
+              <option value="groq">Groq (direct)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="llm-model">Model</label>
+            <select id="llm-model"></select>
+          </div>
+          <div class="form-group">
+            <label for="llm-key-primary">API Key</label>
+            <input type="password" id="llm-key-primary" placeholder="Key for selected provider" autocomplete="off" />
+          </div>
+        </div>
+
+        <details class="key-fallbacks">
+          <summary>Fallback API keys (optional)</summary>
+          <div class="form-row form-row-3">
+            <div class="form-group">
+              <label for="llm-key-openrouter">OpenRouter</label>
+              <input type="password" id="llm-key-openrouter" placeholder="OPENROUTER_API_KEY" autocomplete="off" />
+            </div>
+            <div class="form-group">
+              <label for="llm-key-gemini">Gemini</label>
+              <input type="password" id="llm-key-gemini" placeholder="GEMINI_API_KEY" autocomplete="off" />
+            </div>
+            <div class="form-group">
+              <label for="llm-key-groq">Groq</label>
+              <input type="password" id="llm-key-groq" placeholder="GROQ_API_KEY" autocomplete="off" />
+            </div>
+          </div>
+        </details>
+      </section>
+
+      <section class="setup-section">
+        <h2 class="section-title">Google Sheets Write-back</h2>
+        <div class="form-group">
+          <label for="google-sa-json">Service Account JSON</label>
+          <textarea id="google-sa-json" rows="3"
+            placeholder='Paste service account JSON, or leave blank to use GOOGLE_SERVICE_ACCOUNT_JSON in Weft .env'></textarea>
+          <span class="hint">On approve, writes columns F–I: <strong>Research Brief</strong>, <strong>Scores</strong>, <strong>Email Draft</strong>, <strong>Status</strong>. Add those headers in row 1.</span>
+        </div>
+      </section>
+
+      <section class="setup-section">
+        <h2 class="section-title">Weft Connection</h2>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="trigger-id">Weft Trigger ID</label>
+            <input type="text" id="trigger-id" placeholder="uuid from ApiPost node" />
+          </div>
+          <div class="form-group">
+            <label for="ext-token">Extension Token</label>
+            <input type="password" id="ext-token" placeholder="from Weft dashboard" autocomplete="off" />
+          </div>
+        </div>
+      </section>
 
       <div id="parse-status" class="parse-status hidden"></div>
 
@@ -56,7 +143,7 @@
     <header class="queue-header">
       <div class="queue-title">
         <span class="logo-icon small">⬡</span>
-        <span>Sponsorship Researcher</span>
+        <span>Sponsorship Email Assistant</span>
       </div>
       <div id="queue-stats" class="queue-stats"></div>
       <button class="btn-ghost" onclick="showSetup()">← New Run</button>
@@ -68,9 +155,9 @@
     </div>
   </div>
 
-  <!-- Review Panel (slide-in) -->
+  <!-- Review Panel -->
   <div id="review-overlay" class="overlay hidden" onclick="closeReview(event)">
-    <div id="review-panel" class="review-panel">
+    <div id="review-panel" class="review-panel" onclick="event.stopPropagation()">
       <button class="close-btn" onclick="closeReview()">✕</button>
 
       <div class="review-header">
@@ -79,32 +166,46 @@
       </div>
 
       <div class="score-pills" id="score-pills"></div>
+      <div id="score-justifications" class="justifications"></div>
 
       <div class="brief-section">
         <h3>Research Brief</h3>
         <div id="review-brief" class="brief-content"></div>
       </div>
 
+      <div class="brief-section">
+        <h3>Personalization Plan</h3>
+        <div id="review-process" class="brief-content process-content"></div>
+      </div>
+
+      <div class="brief-section hidden" id="draft-section">
+        <h3>Email Draft Preview</h3>
+        <div id="review-draft" class="brief-content draft-content"></div>
+      </div>
+
       <div class="form-group">
-        <label for="annotation-input">Annotation</label>
+        <label for="annotation-input">Your Notes</label>
         <textarea id="annotation-input" rows="3"
-          placeholder="Add notes, context, or direction for the outreach..."></textarea>
+          placeholder="Add context, angles, or edits before approving..."></textarea>
       </div>
 
       <div class="form-group hidden" id="direction-group">
         <label for="direction-input">Deeper Dive Direction</label>
         <input type="text" id="direction-input"
-          placeholder="What angle should the agent dig into?" />
+          placeholder="What should the agent dig into? (e.g. their AI infra team, recent partnership)" />
+        <button type="button" class="btn-secondary btn-sm" onclick="submitReview('deeper')">Submit Deeper Dive</button>
       </div>
 
       <div class="review-actions">
-        <button class="btn-approve" onclick="submitReview('approve')">✅ Approve</button>
+        <button class="btn-approve" onclick="submitReview('approve')">✅ Approve &amp; Write to Sheet</button>
         <button class="btn-dive" onclick="toggleDiveDirection()">🔍 Deeper Dive</button>
         <button class="btn-skip" onclick="submitReview('skip')">⏭ Skip</button>
       </div>
     </div>
   </div>
 
+  <script src="templates/chimes.js"></script>
+  <script src="models.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

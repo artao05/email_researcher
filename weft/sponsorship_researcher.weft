@@ -1,51 +1,192 @@
-# Project: Sponsorship Researcher
-# Description: Parallel company-event relevance research with human-in-the-loop review
-
-# ─────────────────────────────────────────────────────────────
-# INSTRUCTIONS FOR CURSOR / AI BUILDER
-# ─────────────────────────────────────────────────────────────
-# This is a skeleton. Fill in the wiring below using the
-# language syntax rules in docs/cursor_transfer_plan.md.
-#
-# Key nodes to wire:
-#   trigger (ApiPost) → research (TavilySearch x2 + Http) →
-#   synthesizer (LlmInference) → review (HumanQuery) →
-#   gate (Gate) → outreach (LlmInference) / deep_search (TavilySearch)
-#
-# Read docs/cursor_transfer_plan.md → "Part 1: The Weft Workflow"
-# for the exact port names, field types, and wiring.
-# ─────────────────────────────────────────────────────────────
+# Project: Sponsorship Email Assistant
+# Description: Research a company, human review, draft sponsorship email
 
 # ── Entry point ──────────────────────────────────────────────
-trigger = ApiPost -> (companies: String, event_description: String, sheet_id: String) {
+trigger = ApiPost -> (
+  companies: String,
+  event_description: String,
+  sheet_id: String,
+  template: String,
+  llm_provider: String,
+  llm_model: String,
+  api_keys: String,
+  google_credentials: String
+) {
   label: "Research Trigger"
 }
 
-# ── LLM & search config ──────────────────────────────────────
 llm_config = LlmConfig {
   label: "Research LLM"
-  model: "anthropic/claude-sonnet-4-5"
+  model: "google/gemini-2.5-flash"
   temperature: "0.3"
+  systemPrompt: "You are a sponsorship research assistant. Return valid JSON when asked."
 }
 
 tavily_config = TavilyConfig {
   label: "Tavily Config"
 }
 
-# ── Research (parallel per company pulse) ────────────────────
-# TODO: add TavilySearch nodes, Http scrape, Template to combine results
+# ── Parse first company from JSON list (UI sends all companies) ─
+parse_company = ExecPython(
+  companies: String,
+  event_description: String,
+  sheet_id: String,
+  template: String
+) -> (
+  company_name: String,
+  company_row: String,
+  event_description: String,
+  sheet_id: String,
+  template: String
+) {
+  label: "Parse Company"
+  code: ```
+import json
+arr = json.loads(companies or "[]")
+c = arr[0] if arr else {}
+return {
+  "company_name": c.get("name", "Unknown"),
+  "company_row": str(c.get("row", 2)),
+  "event_description": event_description,
+  "sheet_id": sheet_id,
+  "template": template,
+}
+```
+}
+parse_company.companies = trigger.companies
+parse_company.event_description = trigger.event_description
+parse_company.sheet_id = trigger.sheet_id
+parse_company.template = trigger.template
 
-# ── Synthesis ────────────────────────────────────────────────
-# TODO: LlmInference that produces a JSON brief + scores
+# ── Research ─────────────────────────────────────────────────
+news_query = Template {
+  label: "News Query"
+  template: "{{company_name}} company news sponsorship partnership 2025 2026"
+}
+news_query.company_name = parse_company.company_name
+
+mission_query = Template {
+  label: "Mission Query"
+  template: "{{company_name}} mission sleep circadian health about"
+}
+mission_query.company_name = parse_company.company_name
+
+news_search = TavilySearch {
+  label: "News Search"
+}
+news_search.config = tavily_config.config
+news_search.query = news_query.text
+
+mission_search = TavilySearch {
+  label: "Mission Search"
+}
+mission_search.config = tavily_config.config
+mission_search.query = mission_query.text
+
+synth_prompt = Template {
+  label: "Synthesis Prompt"
+  template: "Analyze sponsorship fit for {{company_name}} and this event: {{event_description}}. Email template context: {{template}}. News research: {{news}}. Mission research: {{mission}}. Return ONLY JSON: {\"discovered_url\":\"\",\"brief\":\"2-3 paragraphs\",\"scores\":{\"mission\":{\"score\":0,\"justification\":\"\"},\"recent_activity\":{\"score\":0,\"justification\":\"\"},\"audience\":{\"score\":0,\"justification\":\"\"},\"overall\":{\"score\":0,\"justification\":\"\"}},\"personalization_plan\":\"bullets\",\"research_highlights\":[\"\"]}"
+}
+synth_prompt.company_name = parse_company.company_name
+synth_prompt.event_description = parse_company.event_description
+synth_prompt.template = parse_company.template
+synth_prompt.news = news_search.answer
+synth_prompt.mission = mission_search.answer
+
+synthesizer = LlmInference -> (response: String) {
+  label: "Research Synthesizer"
+}
+synthesizer.config = llm_config.config
+synthesizer.prompt = synth_prompt.text
+
+parse_synth = ExecPython(response: String, company_name: String) -> (
+  company_name: String,
+  discovered_url: String,
+  brief: String,
+  scores: String,
+  process: String
+) {
+  label: "Parse Synthesis"
+  code: ```
+import json
+try:
+    data = json.loads(response)
+except Exception:
+    data = {"brief": response, "scores": {}, "personalization_plan": ""}
+return {
+    "company_name": company_name,
+    "discovered_url": data.get("discovered_url", ""),
+    "brief": data.get("brief", ""),
+    "scores": json.dumps(data.get("scores", {})),
+    "process": data.get("personalization_plan", ""),
+}
+```
+}
+parse_synth.response = synthesizer.response
+parse_synth.company_name = parse_company.company_name
 
 # ── Human review ─────────────────────────────────────────────
-# TODO: HumanQuery with approve_reject, annotation, deeper_dive_direction fields
+review = HumanQuery {
+  label: "Review Research"
+  title: "Sponsorship Email Review"
+  fields: [
+    {"fieldType": "display", "key": "company_name"},
+    {"fieldType": "display", "key": "discovered_url"},
+    {"fieldType": "display", "key": "brief"},
+    {"fieldType": "display", "key": "scores"},
+    {"fieldType": "display", "key": "process"},
+    {"fieldType": "approve_reject", "key": "decision", "config": {
+      "approveLabel": "Approve & Write to Sheet",
+      "rejectLabel": "Request Deeper Dive"
+    }},
+    {"fieldType": "textarea", "key": "annotation"},
+    {"fieldType": "text_input", "key": "deeper_dive_direction"}
+  ]
+}
+review.company_name = parse_synth.company_name
+review.discovered_url = parse_synth.discovered_url
+review.brief = parse_synth.brief
+review.scores = parse_synth.scores
+review.process = parse_synth.process
 
 # ── Routing ──────────────────────────────────────────────────
-# TODO: Gate nodes for approve vs deeper_dive branches
+approve_gate = Gate { label: "If Approved" }
+approve_gate.pass = review.decision_approved
+approve_gate.value = review.annotation
 
-# ── Approved: draft outreach ─────────────────────────────────
-# TODO: LlmInference → Debug
+dive_gate = Gate { label: "If Deeper Dive" }
+dive_gate.pass = review.decision_rejected
+dive_gate.value = review.deeper_dive_direction
 
-# ── Deeper dive: re-research ─────────────────────────────────
-# TODO: TavilySearch with user direction → loop back to synthesis
+deep_query = Template {
+  label: "Deep Dive Query"
+  template: "{{company_name}} {{direction}}"
+}
+deep_query.company_name = parse_company.company_name
+deep_query.direction = dive_gate.value
+
+deep_search = TavilySearch {
+  label: "Deep Dive Search"
+}
+deep_search.config = tavily_config.config
+deep_search.query = deep_query.text
+
+# ── Draft email on approve ───────────────────────────────────
+draft_prompt = Template {
+  label: "Draft Email Prompt"
+  template: "Write a sponsorship email for {{company_name}}. Event: {{event_description}}. Template JSON: {{template}}. Research brief: {{brief}}. User notes: {{annotation}}. Rules: keep fixed blocks verbatim, personalize variable blocks using research. Return ONLY JSON: {\"subject\":\"...\",\"body\":\"full email\"}"
+}
+draft_prompt.company_name = parse_company.company_name
+draft_prompt.event_description = parse_company.event_description
+draft_prompt.template = parse_company.template
+draft_prompt.brief = parse_synth.brief
+draft_prompt.annotation = approve_gate.value
+
+outreach_llm = LlmInference -> (response: String) {
+  label: "Email Drafter"
+}
+outreach_llm.config = llm_config.config
+outreach_llm.prompt = draft_prompt.text
+
+output_debug = Debug { label: "Final Output" }
+output_debug.data = outreach_llm.response

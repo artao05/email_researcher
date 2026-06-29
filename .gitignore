@@ -1,0 +1,5 @@
+.env
+*.json.key
+*-service-account*.json
+weft-server/
+.DS_Store
