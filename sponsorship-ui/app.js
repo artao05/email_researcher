@@ -268,7 +268,10 @@ async function startResearch() {
     showQueueView();
     startPolling();
   } catch (err) {
-    showStatus('error', err.message);
+    const msg = err.message === 'Failed to fetch'
+      ? 'Network error — is Weft running on :3000? Open the UI via http://localhost:8090 (run: bash scripts/open-ui.sh), not as a file:// page.'
+      : err.message;
+    showStatus('error', msg);
     btn.disabled = false;
     btn.textContent = 'Run Research';
   }
