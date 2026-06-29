@@ -79,7 +79,12 @@
           </div>
           <div class="form-group">
             <label for="llm-model">Model</label>
-            <select id="llm-model"></select>
+            <select id="llm-model">
+              <option value="google/gemini-2.5-flash">Gemini 2.5 Flash (via OR)</option>
+              <option value="anthropic/claude-sonnet-4">Claude Sonnet 4</option>
+              <option value="meta-llama/llama-3.3-70b-instruct">Llama 3.3 70B</option>
+              <option value="openai/gpt-4o-mini">GPT-4o Mini</option>
+            </select>
           </div>
           <div class="form-group">
             <label for="llm-key-primary">API Key</label>

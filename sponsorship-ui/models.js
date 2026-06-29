@@ -34,16 +34,23 @@ const FALLBACK_ORDER = ['openrouter', 'gemini', 'groq'];
 
 function populateModelDropdown(provider) {
   const sel = document.getElementById('llm-model');
+  if (!sel) return;
   const catalog = LLM_CATALOG[provider];
-  if (!catalog) return;
+  if (!catalog || !catalog.models.length) return;
+
+  const previous = sel.value;
   sel.innerHTML = catalog.models
     .map(m => `<option value="${m.id}">${m.label}</option>`)
     .join('');
+
+  const stillValid = catalog.models.some(m => m.id === previous);
+  sel.value = stillValid ? previous : catalog.models[0].id;
 }
 
 function onProviderChange() {
   const provider = document.getElementById('llm-provider').value;
   populateModelDropdown(provider);
+  syncPrimaryKeyToProvider?.();
   saveProviderPrefs();
 }
 
@@ -77,8 +84,22 @@ function saveProviderPrefs() {
 
 function loadProviderPrefs() {
   const provider = localStorage.getItem('llm_provider') || 'openrouter';
-  document.getElementById('llm-provider').value = provider;
+  const providerEl = document.getElementById('llm-provider');
+  const modelEl = document.getElementById('llm-model');
+  if (!providerEl || !modelEl) return;
+
+  providerEl.value = provider;
   populateModelDropdown(provider);
+
   const savedModel = localStorage.getItem('llm_model');
-  if (savedModel) document.getElementById('llm-model').value = savedModel;
+  if (savedModel && [...modelEl.options].some(o => o.value === savedModel)) {
+    modelEl.value = savedModel;
+  }
+}
+
+// Populate on load even if app.js init order changes
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', loadProviderPrefs);
+} else {
+  loadProviderPrefs();
 }
