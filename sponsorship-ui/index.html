@@ -66,12 +66,13 @@
 
       <section class="setup-section">
         <h2 class="section-title">LLM Provider</h2>
-        <p class="section-desc">One model for research and drafting. UI keys override Weft <code>.env</code>. Missing keys fall back in order: selected → OpenRouter → Gemini → Groq.</p>
+        <p class="section-desc">One model for research and drafting. UI keys override Weft <code>.env</code>. Missing keys fall back in order: selected → OpenAI → OpenRouter → Gemini → Groq.</p>
 
         <div class="form-row form-row-3">
           <div class="form-group">
             <label for="llm-provider">Provider</label>
             <select id="llm-provider" onchange="onProviderChange()">
+              <option value="openai">OpenAI (direct)</option>
               <option value="openrouter">OpenRouter</option>
               <option value="gemini">Gemini (direct)</option>
               <option value="groq">Groq (direct)</option>
@@ -95,6 +96,10 @@
         <details class="key-fallbacks">
           <summary>Fallback API keys (optional)</summary>
           <div class="form-row form-row-3">
+            <div class="form-group">
+              <label for="llm-key-openai">OpenAI</label>
+              <input type="password" id="llm-key-openai" placeholder="OPENAI_API_KEY" autocomplete="off" />
+            </div>
             <div class="form-group">
               <label for="llm-key-openrouter">OpenRouter</label>
               <input type="password" id="llm-key-openrouter" placeholder="OPENROUTER_API_KEY" autocomplete="off" />
@@ -139,6 +144,9 @@
 
       <button id="run-btn" class="btn-primary" onclick="startResearch()">
         Run Research
+      </button>
+      <button id="resume-btn" class="btn-secondary hidden" style="margin-top:12px" onclick="resumeReviewsFromSetup()">
+        Resume Reviews
       </button>
     </div>
   </div>
@@ -209,8 +217,8 @@
     </div>
   </div>
 
-  <script src="templates/chimes.js?v=3"></script>
-  <script src="models.js?v=3"></script>
-  <script src="app.js?v=3"></script>
+  <script src="templates/chimes.js?v=6"></script>
+  <script src="models.js?v=6"></script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>

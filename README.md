@@ -69,7 +69,8 @@ Edit **`.env`** in this folder (project root):
 
 ```bash
 TAVILY_API_KEY=tvly-...
-OPENROUTER_API_KEY=sk-or-...   # or GEMINI / GROQ
+OPENROUTER_API_KEY=sk-or-...   # or OPENAI / GEMINI / GROQ
+OPENAI_API_KEY=sk-...
 ```
 
 ### 2. Start Weft
@@ -106,6 +107,7 @@ bash scripts/open-ui.sh
 
 | Provider | UI key field | Example models |
 |----------|--------------|----------------|
+| OpenAI | OpenAI key | `gpt-4o-mini`, `gpt-4o` |
 | OpenRouter | OpenRouter key | Claude Sonnet 4, Gemini Flash via OR |
 | Gemini | Gemini key | `gemini-2.0-flash` |
 | Groq | Groq key | Llama 3.3 70B |

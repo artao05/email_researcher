@@ -26,6 +26,7 @@ import json, urllib.request, os, re
 weft = open("$WEFT_FILE").read()
 tavily = os.environ.get("TAVILY_API_KEY", "")
 openrouter = os.environ.get("OPENROUTER_API_KEY", "")
+openai = os.environ.get("OPENAI_API_KEY", "")
 
 def inject_api_key(block_name, key_value):
     global weft
@@ -38,7 +39,10 @@ def inject_api_key(block_name, key_value):
         print(f"warn: could not inject apiKey into {block_name}")
 
 inject_api_key("tavily_config", tavily)
-inject_api_key("llm_config", openrouter)
+if openai:
+    inject_api_key("llm_config", openai)
+elif openrouter:
+    inject_api_key("llm_config", openrouter)
 
 project_id = "$PROJECT_ID"
 for url, body, method in [

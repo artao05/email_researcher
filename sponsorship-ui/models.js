@@ -28,9 +28,18 @@ const LLM_CATALOG = {
       { id: 'mixtral-8x7b-32768', label: 'Mixtral 8x7B' },
     ],
   },
+  openai: {
+    label: 'OpenAI (direct)',
+    envKey: 'OPENAI_API_KEY',
+    models: [
+      { id: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+      { id: 'gpt-4o', label: 'GPT-4o' },
+      { id: 'gpt-4.1-mini', label: 'GPT-4.1 Mini' },
+    ],
+  },
 };
 
-const FALLBACK_ORDER = ['openrouter', 'gemini', 'groq'];
+const FALLBACK_ORDER = ['openai', 'openrouter', 'gemini', 'groq'];
 
 function populateModelDropdown(provider) {
   const sel = document.getElementById('llm-model');
@@ -83,7 +92,7 @@ function saveProviderPrefs() {
 }
 
 function loadProviderPrefs() {
-  const provider = localStorage.getItem('llm_provider') || 'openrouter';
+  const provider = localStorage.getItem('llm_provider') || 'openai';
   const providerEl = document.getElementById('llm-provider');
   const modelEl = document.getElementById('llm-model');
   if (!providerEl || !modelEl) return;

@@ -16,12 +16,14 @@ trigger = ApiPost -> (
 }
 
 llm_config = LlmConfig {
-  label: "Research LLM"
-  model: "google/gemini-2.5-flash"
+  label: "Research LLM (fallback via OpenRouter)"
+  model: "gpt-4o-mini"
   temperature: "0.3"
-  systemPrompt: "You are a sponsorship research assistant. Return valid JSON when asked."
+  maxTokens: "4096"
+  systemPrompt: "You are a sponsorship research assistant. Return ONLY valid JSON matching the requested schema. Never return email templates or markdown code fences."
 }
 
+# Shared ExecPython LLM router — supports OpenAI, OpenRouter, Gemini, Groq
 tavily_config = TavilyConfig {
   label: "Tavily Config"
 }
@@ -85,19 +87,80 @@ mission_search.query = mission_query.text
 
 synth_prompt = Template {
   label: "Synthesis Prompt"
-  template: "Analyze sponsorship fit for {{company_name}} and this event: {{event_description}}. Email template context: {{template}}. News research: {{news}}. Mission research: {{mission}}. Return ONLY JSON: {\"discovered_url\":\"\",\"brief\":\"2-3 paragraphs\",\"scores\":{\"mission\":{\"score\":0,\"justification\":\"\"},\"recent_activity\":{\"score\":0,\"justification\":\"\"},\"audience\":{\"score\":0,\"justification\":\"\"},\"overall\":{\"score\":0,\"justification\":\"\"}},\"personalization_plan\":\"bullets\",\"research_highlights\":[\"\"]}"
+  template: "Analyze sponsorship fit for {{company_name}} and this event: {{event_description}}.\n\nNews research:\n{{news}}\n\nMission/company research:\n{{mission}}\n\nReturn ONLY a JSON object (no markdown fences) with this exact shape:\n{\"discovered_url\":\"company website if found\",\"brief\":\"2-3 paragraph research summary about the company and why they might sponsor\",\"scores\":{\"mission\":{\"score\":0,\"justification\":\"\"},\"recent_activity\":{\"score\":0,\"justification\":\"\"},\"audience\":{\"score\":0,\"justification\":\"\"},\"overall\":{\"score\":0,\"justification\":\"\"}},\"personalization_plan\":\"bullet list of email angles\",\"research_highlights\":[\"\"]}\n\nDo NOT return email templates. Scores must be integers 1-10."
 }
 synth_prompt.company_name = parse_company.company_name
 synth_prompt.event_description = parse_company.event_description
-synth_prompt.template = parse_company.template
 synth_prompt.news = news_search.answer
 synth_prompt.mission = mission_search.answer
 
-synthesizer = LlmInference -> (response: String) {
+synthesizer = ExecPython(
+  prompt: String,
+  llm_provider: String,
+  llm_model: String,
+  api_keys: String
+) -> (response: String) {
   label: "Research Synthesizer"
+  code: ```
+import json, urllib.request, os
+
+SYSTEM = "You are a sponsorship research assistant. Return ONLY valid JSON matching the requested schema. Never return email templates or markdown code fences."
+ENV_KEYS = {"openai": "OPENAI_API_KEY", "openrouter": "OPENROUTER_API_KEY", "gemini": "GEMINI_API_KEY", "groq": "GROQ_API_KEY"}
+DEFAULT_MODELS = {"openai": "gpt-4o-mini", "openrouter": "google/gemini-2.5-flash", "gemini": "gemini-2.0-flash", "groq": "llama-3.3-70b-versatile"}
+
+def pick_key(provider, keys_json):
+    keys = json.loads(keys_json or "{}")
+    order = [provider, "openai", "openrouter", "gemini", "groq"]
+    seen = set()
+    for p in order:
+        if p in seen:
+            continue
+        seen.add(p)
+        k = keys.get(p) or os.environ.get(ENV_KEYS.get(p, ""), "")
+        if k:
+            return p, k
+    raise RuntimeError("No LLM API key available")
+
+def chat_openai(model, key, prompt):
+    req = urllib.request.Request("https://api.openai.com/v1/chat/completions", data=json.dumps({
+        "model": model, "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
+        "temperature": 0.3, "max_tokens": 4096,
+    }).encode(), headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        return json.loads(r.read())["choices"][0]["message"]["content"]
+
+def chat_openrouter(model, key, prompt):
+    req = urllib.request.Request("https://openrouter.ai/api/v1/chat/completions", data=json.dumps({
+        "model": model, "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
+        "temperature": 0.3, "max_tokens": 4096,
+    }).encode(), headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        return json.loads(r.read())["choices"][0]["message"]["content"]
+
+def chat_gemini(model, key, prompt):
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+    req = urllib.request.Request(url, data=json.dumps({"contents": [{"parts": [{"text": SYSTEM + "\\n\\n" + prompt}]}]}).encode(), headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        return json.loads(r.read())["candidates"][0]["content"]["parts"][0]["text"]
+
+def chat_groq(model, key, prompt):
+    req = urllib.request.Request("https://api.groq.com/openai/v1/chat/completions", data=json.dumps({
+        "model": model, "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
+        "temperature": 0.3, "max_tokens": 4096,
+    }).encode(), headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        return json.loads(r.read())["choices"][0]["message"]["content"]
+
+CALLERS = {"openai": chat_openai, "openrouter": chat_openrouter, "gemini": chat_gemini, "groq": chat_groq}
+p, key = pick_key(llm_provider, api_keys)
+model = llm_model or DEFAULT_MODELS.get(p, "gpt-4o-mini")
+return {"response": CALLERS[p](model, key, prompt)}
+```
 }
-synthesizer.config = llm_config.config
 synthesizer.prompt = synth_prompt.text
+synthesizer.llm_provider = trigger.llm_provider
+synthesizer.llm_model = trigger.llm_model
+synthesizer.api_keys = trigger.api_keys
 
 parse_synth = ExecPython(response: String, company_name: String) -> (
   company_name: String,
@@ -108,17 +171,50 @@ parse_synth = ExecPython(response: String, company_name: String) -> (
 ) {
   label: "Parse Synthesis"
   code: ```
-import json
-try:
-    data = json.loads(response)
-except Exception:
-    data = {"brief": response, "scores": {}, "personalization_plan": ""}
+import json, re
+
+def parse_json(text):
+    text = (text or "").strip()
+    if not text:
+        return {}
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+    if m:
+        try:
+            return json.loads(m.group(1).strip())
+        except Exception:
+            pass
+    m = re.search(r"\{[\s\S]*\}", text)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except Exception:
+            pass
+    return {"brief": text, "scores": {}, "personalization_plan": ""}
+
+data = parse_json(response)
+brief = data.get("brief", "")
+if not brief and data.get("blocks"):
+    brief = "Research synthesis failed — the model returned an email template instead of research. Skip and re-run, or request a deeper dive."
+scores = data.get("scores") or {}
+if not isinstance(scores, dict):
+    scores = {}
+process = data.get("personalization_plan", data.get("process", ""))
+if isinstance(process, list):
+    process = "\n".join(f"- {item}" for item in process if item)
+elif isinstance(process, dict):
+    process = json.dumps(process)
+else:
+    process = str(process or "")
 return {
     "company_name": company_name,
     "discovered_url": data.get("discovered_url", ""),
-    "brief": data.get("brief", ""),
-    "scores": json.dumps(data.get("scores", {})),
-    "process": data.get("personalization_plan", ""),
+    "brief": brief,
+    "scores": json.dumps(scores),
+    "process": process,
 }
 ```
 }
@@ -182,11 +278,73 @@ draft_prompt.template = parse_company.template
 draft_prompt.brief = parse_synth.brief
 draft_prompt.annotation = approve_gate.value
 
-outreach_llm = LlmInference -> (response: String) {
+outreach_llm = ExecPython(
+  prompt: String,
+  llm_provider: String,
+  llm_model: String,
+  api_keys: String
+) -> (response: String) {
   label: "Email Drafter"
+  code: ```
+import json, urllib.request, os
+
+SYSTEM = "You write sponsorship outreach emails. Return ONLY valid JSON with subject and body fields."
+ENV_KEYS = {"openai": "OPENAI_API_KEY", "openrouter": "OPENROUTER_API_KEY", "gemini": "GEMINI_API_KEY", "groq": "GROQ_API_KEY"}
+DEFAULT_MODELS = {"openai": "gpt-4o-mini", "openrouter": "google/gemini-2.5-flash", "gemini": "gemini-2.0-flash", "groq": "llama-3.3-70b-versatile"}
+
+def pick_key(provider, keys_json):
+    keys = json.loads(keys_json or "{}")
+    order = [provider, "openai", "openrouter", "gemini", "groq"]
+    seen = set()
+    for p in order:
+        if p in seen:
+            continue
+        seen.add(p)
+        k = keys.get(p) or os.environ.get(ENV_KEYS.get(p, ""), "")
+        if k:
+            return p, k
+    raise RuntimeError("No LLM API key available")
+
+def chat_openai(model, key, prompt):
+    req = urllib.request.Request("https://api.openai.com/v1/chat/completions", data=json.dumps({
+        "model": model, "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
+        "temperature": 0.3, "max_tokens": 4096,
+    }).encode(), headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        return json.loads(r.read())["choices"][0]["message"]["content"]
+
+def chat_openrouter(model, key, prompt):
+    req = urllib.request.Request("https://openrouter.ai/api/v1/chat/completions", data=json.dumps({
+        "model": model, "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
+        "temperature": 0.3, "max_tokens": 4096,
+    }).encode(), headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        return json.loads(r.read())["choices"][0]["message"]["content"]
+
+def chat_gemini(model, key, prompt):
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+    req = urllib.request.Request(url, data=json.dumps({"contents": [{"parts": [{"text": SYSTEM + "\\n\\n" + prompt}]}]}).encode(), headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        return json.loads(r.read())["candidates"][0]["content"]["parts"][0]["text"]
+
+def chat_groq(model, key, prompt):
+    req = urllib.request.Request("https://api.groq.com/openai/v1/chat/completions", data=json.dumps({
+        "model": model, "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
+        "temperature": 0.3, "max_tokens": 4096,
+    }).encode(), headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        return json.loads(r.read())["choices"][0]["message"]["content"]
+
+CALLERS = {"openai": chat_openai, "openrouter": chat_openrouter, "gemini": chat_gemini, "groq": chat_groq}
+p, key = pick_key(llm_provider, api_keys)
+model = llm_model or DEFAULT_MODELS.get(p, "gpt-4o-mini")
+return {"response": CALLERS[p](model, key, prompt)}
+```
 }
-outreach_llm.config = llm_config.config
 outreach_llm.prompt = draft_prompt.text
+outreach_llm.llm_provider = trigger.llm_provider
+outreach_llm.llm_model = trigger.llm_model
+outreach_llm.api_keys = trigger.api_keys
 
 output_debug = Debug { label: "Final Output" }
 output_debug.data = outreach_llm.response
